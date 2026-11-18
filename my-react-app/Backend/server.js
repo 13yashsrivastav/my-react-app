@@ -3,19 +3,14 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
+const pool = require('./db');
 const app = express();
 
 const PORT = process.env.PORT || 3000;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Temporary data until MySQL is connected
-let users = [];
-let nextId = 1;
-
-// Home route
 app.get('/', (req, res) => {
     res.json({
         success: true,
@@ -24,36 +19,44 @@ app.get('/', (req, res) => {
     });
 });
 
-// Health check
 app.get('/api/health', (req, res) => {
-    res.json({
-        success: true,
-        message: 'Backend is healthy'
-    });
+    res.json({ success: true, message: 'Backend is healthy' });
 });
 
 // Get all users
-app.get('/api/users', (req, res) => {
-    res.status(200).json(users);
-});
-
-// Get user by ID
-app.get('/api/users/:id', (req, res) => {
-    const user = users.find(
-        u => u.id === Number(req.params.id)
-    );
-
-    if (!user) {
-        return res.status(404).json({
-            message: 'User not found'
-        });
+app.get('/api/users', async (req, res) => {
+    try {
+        const [rows] = await pool.query(
+            'SELECT id, name, email FROM users ORDER BY id DESC'
+        );
+        res.json(rows);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Database error' });
     }
-
-    res.json(user);
 });
 
-// Add new user
-app.post('/api/users', (req, res) => {
+// Get one user
+app.get('/api/users/:id', async (req, res) => {
+    try {
+        const [rows] = await pool.execute(
+            'SELECT id, name, email FROM users WHERE id = ?',
+            [req.params.id]
+        );
+
+        if (!rows.length) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        res.json(rows[0]);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Database error' });
+    }
+});
+
+// Add user
+app.post('/api/users', async (req, res) => {
     const { name, email } = req.body;
 
     if (!name?.trim() || !email?.trim()) {
@@ -62,44 +65,32 @@ app.post('/api/users', (req, res) => {
         });
     }
 
-    const normalizedEmail = email.trim().toLowerCase();
+    try {
+        const [result] = await pool.execute(
+            'INSERT INTO users (name, email) VALUES (?, ?)',
+            [name.trim(), email.trim().toLowerCase()]
+        );
 
-    const emailExists = users.some(
-        u => u.email === normalizedEmail
-    );
-
-    if (emailExists) {
-        return res.status(409).json({
-            message: 'Email already exists'
+        res.status(201).json({
+            message: 'User created successfully',
+            user: {
+                id: result.insertId,
+                name: name.trim(),
+                email: email.trim().toLowerCase()
+            }
         });
+    } catch (error) {
+        if (error.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({ message: 'Email already exists' });
+        }
+        console.error(error);
+        res.status(500).json({ message: 'Database error' });
     }
-
-    const newUser = {
-        id: nextId++,
-        name: name.trim(),
-        email: normalizedEmail
-    };
-
-    users.push(newUser);
-
-    res.status(201).json({
-        message: 'User created successfully',
-        user: newUser
-    });
 });
 
 // Update user
-app.put('/api/users/:id', (req, res) => {
-    const id = Number(req.params.id);
+app.put('/api/users/:id', async (req, res) => {
     const { name, email } = req.body;
-
-    const user = users.find(u => u.id === id);
-
-    if (!user) {
-        return res.status(404).json({
-            message: 'User not found'
-        });
-    }
 
     if (!name?.trim() || !email?.trim()) {
         return res.status(400).json({
@@ -107,46 +98,52 @@ app.put('/api/users/:id', (req, res) => {
         });
     }
 
-    const normalizedEmail = email.trim().toLowerCase();
+    try {
+        const [result] = await pool.execute(
+            'UPDATE users SET name = ?, email = ? WHERE id = ?',
+            [name.trim(), email.trim().toLowerCase(), req.params.id]
+        );
 
-    const emailExists = users.some(
-        u => u.email === normalizedEmail && u.id !== id
-    );
+        if (!result.affectedRows) {
+            return res.status(404).json({ message: 'User not found' });
+        }
 
-    if (emailExists) {
-        return res.status(409).json({
-            message: 'Email already exists'
+        res.json({
+            message: 'User updated successfully',
+            user: {
+                id: Number(req.params.id),
+                name: name.trim(),
+                email: email.trim().toLowerCase()
+            }
         });
+    } catch (error) {
+        if (error.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({ message: 'Email already exists' });
+        }
+        console.error(error);
+        res.status(500).json({ message: 'Database error' });
     }
-
-    user.name = name.trim();
-    user.email = normalizedEmail;
-
-    res.json({
-        message: 'User updated successfully',
-        user
-    });
 });
 
 // Delete user
-app.delete('/api/users/:id', (req, res) => {
-    const id = Number(req.params.id);
-    const index = users.findIndex(u => u.id === id);
+app.delete('/api/users/:id', async (req, res) => {
+    try {
+        const [result] = await pool.execute(
+            'DELETE FROM users WHERE id = ?',
+            [req.params.id]
+        );
 
-    if (index === -1) {
-        return res.status(404).json({
-            message: 'User not found'
-        });
+        if (!result.affectedRows) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        res.json({ message: 'User deleted successfully' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Database error' });
     }
-
-    users.splice(index, 1);
-
-    res.json({
-        message: 'User deleted successfully'
-    });
 });
 
-// Handle unknown routes
 app.use((req, res) => {
     res.status(404).json({
         success: false,
@@ -154,13 +151,6 @@ app.use((req, res) => {
     });
 });
 
-// Start server
-app.listen(PORT, () => {
-    console.log('--------------------------------');
-    console.log('       USERSPACE API');
-    console.log('--------------------------------');
-    console.log(`Server: http://localhost:${PORT}`);
-    console.log(`API: http://localhost:${PORT}/api/users`);
-    console.log('Status: Running');
-    console.log('--------------------------------');
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`UserSpace API running on port ${PORT}`);
 });

@@ -2,8 +2,7 @@
 import { useEffect, useState } from 'react';
 import './App.css';
 
-const API_URL = 'http://localhost:3000/api/users';
-
+const API_URL = '/api/users';
 function App() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
